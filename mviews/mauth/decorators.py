@@ -12,7 +12,7 @@ from functools import wraps
 from django.utils.decorators import available_attrs
 
 from mviews.utils import err
-from mviews.auth.utils import get_level
+from mviews.mauth.utils import get_level
 
 
 def authenticated(func):

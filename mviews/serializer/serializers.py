@@ -26,7 +26,7 @@ def _serialize_json(mview, qs, rootcall, extra = None):
     mview can be passed with the extra param. This needs to be json serializable
     data.
     """
-    paginate = mview.params.get('_page', getattr(mview, '__paginate', 0))
+    paginate = mview.params.get('_limit', getattr(mview, '__paginate', 0))
     return_single = (len(qs) > 1 
             or paginate 
             or not getattr(settings, "RETURN_SINGLES", True)
@@ -41,7 +41,7 @@ def _serialize_json(mview, qs, rootcall, extra = None):
     if paginate:
         qs, rslt = create_paging_dict(qs, 
                                       mview.url_path, 
-                                      mview.params.get('_limit', 10), 
+                                      paginate, 
                                       mview.params.get('_page', 1), 
                                       rootcall
                                       )

@@ -28,12 +28,12 @@ from django.contrib.auth.models import AbstractBaseUser
 from django.conf import settings
 from django.utils import timezone
 
-from .serializer import serialize
-from .utils import err
-from .utils import paginator
-from .utils import read
-from mviews.errors import AuthenticationError, AuthorizationError,\
-    BaseAuthError
+from .utils import check_perms
+from .utils import response
+from .utils import other_response
+from mviews.utils import err
+from mviews.utils import read
+from mviews.errors import BaseAuthError
 
 class ViewWrapper(View):
     """
@@ -69,33 +69,16 @@ class ViewWrapper(View):
     allowed_methods = ['get', 'post', 'put', 'delete', 'head', 'options']
     return_types = ['application/json']
     parses = ['application/json']
-    register_route = False
+
     def __init__(self, *args, **kwargs):
         super(ViewWrapper, self).__init__(**kwargs)
-        
-    def _check_perms(self, request):
-        if hasattr(self, '_perms'):
-            if (not request.user.is_authenticated() 
-                and request.method.lower() in self._perms):
-                raise AuthenticationError()
-            req = self._perms.get(request.method.lower(), False)
-            if req:
-                try:
-                    if (request.user.level < 
-                            request.user.get_level_by_name(req)):
-                        raise AuthorizationError("Unauthorized. You do not " 
-                                    "have permission "
-                                   "'{}' or above.".format(req))
-                except AttributeError as e:
-                    print(e)
-                    pass #Likely because user object not set up or anonymous
         
     def dispatch(self, request, *args, **kwargs):
         if request.method.lower() not in self.allowed_methods:
             return err("Method {} not allowed.".format(request.method), 405)
 
         try:
-            self._check_perms(request)
+            check_perms(request, self._perms)
         except BaseAuthError as e:
             return err(e, e.status)
         #It makes sense why these are stored in the request, but i want them
@@ -146,8 +129,14 @@ class ModelWrapper(BaseModelWrapper, m.Model):
         abstract = True
         
 class UserManagerWrapper(BaseUserManager):
-    def _create_user(self, username, email, password,
-                     is_staff, is_superuser, **extra_fields):
+    
+    def _create_user(self, username, 
+                     email, 
+                     password,
+                     is_staff, 
+                     is_superuser, 
+                     **extra_fields
+                     ):
         """
         Creates and saves a User with the given username, email and password.
         """
@@ -179,7 +168,6 @@ class ABUWrapper(BaseModelWrapper, AbstractBaseUser):
     method is sent. To delete a user, call the delete_entity method.
     """
     level = m.SmallIntegerField('The level of the user.', default = 0)
-    
     objects = UserManagerWrapper() 
     
     def delete_entity(self, *args, **kwargs):
@@ -197,34 +185,18 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
     ViewWrapper.
     
     A few things to note about this class:
-    
-    To paginate, add the attribute __paginate = <int> where int is the number
-    of entities to include in the pagination. Default limit is 10. To get all
-    entities, set __paginate == 0.
-    
-    To change the way pagination is done, subclass this class and then override
-    the paginate function.
         
-    To send in a page, use the _page query param.
+    To send in a page, use the _page query param. You can also set the default
+    pagination size by adding the __paginate attribute to the model view, which
+    will be used if the _limit query param is not found.
+    
     To set a custom limit on the pagination, use the query param _limit.
-        -Note: negative numbers are not valid and will default to mview limit
+        -Note: negative numbers are not valid and will default to 10
         
     When the unique id you want to query by is not the pk of the field, you can
-    add the _unique_id = '<field>' on the modelwhere field is the name of the 
+    add the _unique_id = '<field>' on the model, where field is the name of the 
     field you want to query by.
     """
-    
-    
-    def paginate(self, qs):
-        """
-        Use the paginator property to paginate a view.
-        """
-        return paginator(qs, 
-                           self.params.get('_limit',
-                                           getattr(self, '__paginate', 10)
-                                           ),
-                           self.params.get('_page', 1)
-                           )
     
     @property
     def unique_id(self):
@@ -251,7 +223,8 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
     def m2ms(self):
         if not hasattr(self, "_m2ms"):
             self._m2ms = [str(m2m[0]).split('.')[-1] 
-                           for m2m in self.__class__._meta.get_m2m_with_model()]
+                           for m2m in self.__class__._meta.get_m2m_with_model()
+                         ]
         return self._m2ms
     
     @property
@@ -260,7 +233,9 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
             self._fks = [str(fk).split('.')[-1] for fk in self.field_names 
                          if getattr(self._meta.get_field_by_name(fk)[0], 
                                     "foreign_key",
-                                     False)]
+                                     False
+                                     )
+                         ]
         return self._fks
         
     @property
@@ -303,7 +278,8 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         try:
             filtered = self.__class__.objects.all()
         except AttributeError:
-            return "This model is abstract and has no actual data fields."
+            raise TypeError("This model is abstract and has no actual data "
+                            "fields.")
         if len(args) == 1 and 'id' in self.field_names:
             filtered = filtered.filter(id = args[0])
         elif 'id' in self.field_names and args:
@@ -311,29 +287,29 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         elif args:
             filtered = filtered.filter(**filter_by_pks(args))            
         reqDict = {field : self.params[field] for field in self.field_names 
-                                                  if field in self.params} 
+                                                  if field in self.params
+                                                  } 
         return filtered.filter(**reqDict)
     
     def _expand(self, qs):
         '''
         Expands the queryset if necessary.
         '''
-        if not isinstance(qs, str):
-            pfields = getattr(self, 'public_fields', [])
-            fields = []
-            if self.fields or pfields:
-                if pfields and not self.fields:
-                    fields = pfields
-                else:
-                    fields = self.fields #already filtered
-            if self.expand:
-                if fields:
-                    qs = qs.only(*fields)
-                qs = qs.select_related().prefetch_related()
-            elif fields:
-                qs = qs.values(*fields)
+        pfields = getattr(self, 'public_fields', [])
+        fields = []
+        if self.fields or pfields:
+            if pfields and not self.fields:
+                fields = pfields
             else:
-                qs = qs.values()
+                fields = self.fields #already filtered
+        if self.expand:
+            if fields:
+                qs = qs.only(*fields)
+            qs = qs.select_related().prefetch_related()
+        elif fields:
+            qs = qs.values(*fields)
+        else:
+            qs = qs.values()
         return qs
     
     def _get_aggs(self, qs):
@@ -373,7 +349,10 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         @return an iterable of values from the database, not necessarily of 
         model objects
         '''
-        qs = self._expand(self._get_qs(*args, **kwargs))
+        try:
+            qs = self._expand(self._get_qs(*args, **kwargs))
+        except ValueError as e:
+            return err(e, 500)
         qs = self._get_aggs(qs)
         if 'latest' in self.params:
             qs = [qs[0]]
@@ -421,7 +400,7 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         If you want to return only the aggregates and not the rest of the query,
         set the flag _aggs_only.
         '''
-        return self.response(self.do_get(request, *args, **kwargs))
+        return response(self.do_get(request, *args, **kwargs))
     
     def do_post(self, request, *args, **kwargs):
         '''
@@ -511,7 +490,7 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         
         These will return the data that has been created as if it were a GET.
         '''
-        return self.response(self.do_post(request, *args, **kwargs))   
+        return response(self.do_post(request, *args, **kwargs))   
     
     def _update_entity(self, qs, data, to_remove):
         """
@@ -547,28 +526,19 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         to_remove = getattr(self, '_no_update_fields', []) 
         if not isinstance(self.data['data'], list):
             qs = self._get_qs(*args, **kwargs)
-            if isinstance(qs, str):
-                return err(qs)
             self._update_entity(qs, self.data, to_remove)
         else:
             qslookup = self.data.get('lookup', self.unique_id)
-            try:
-                with transaction.atomic():
-                    for i, d in enumerate(self.data['data']):
-                        if qslookup in d["data"]:
-                            qs = self.__class__.objects.filter(
-                                             **{qslookup:d['data'][qslookup]}
-                                                             )
-                            self._update_entity(qs, d, to_remove)
-                        else:
-                            raise KeyError("Lookup {} was not found in object "
-                                           "number {}".format(qslookup, i))
-            except KeyError as e:
-                return err(e)
-            except FieldDoesNotExist as e:
-                return err(e)
-        
-        return None
+            with transaction.atomic():
+                for i, d in enumerate(self.data['data']):
+                    if qslookup in d["data"]:
+                        qs = self.__class__.objects.filter(
+                                         **{qslookup:d['data'][qslookup]}
+                                                         )
+                        self._update_entity(qs, d, to_remove)
+                    else:
+                        raise KeyError("Lookup {} was not found in object "
+                                       "number {}".format(qslookup, i))
     
     def put(self, request, *args, **kwargs):
         '''
@@ -617,10 +587,11 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         will assume the pk and will search for the pk in the body of the data.
         If the pk is not found, then an error is thrown and none are updated.
         '''
-        r = self.do_put(request, *args, **kwargs)
-        if r is not None:
-            return r
-        return self.other_response()
+        try:
+            self.do_put(request, *args, **kwargs)
+        except (KeyError, FieldDoesNotExist, TypeError) as e:
+            return err(e)
+        return other_response()
     
     def delete(self, request, *args, **kwargs):
         '''
@@ -635,13 +606,12 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         if not args:
             if "ids" not in self.params:
                 return err("Did not contain any valid ids to delete.")
-        deletes = self._get_qs(*args, **kwargs)   
-        if isinstance(deletes, str):
-            return err(deletes)  
- 
+        try:
+            deletes = self._get_qs(*args, **kwargs)   
+        except TypeError as e:
+            return err(e)
         deletes.delete()
-
-        return self.other_response()
+        return other_response()
     
     def head(self, request, *args, **kwargs):
         '''
@@ -673,85 +643,8 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
                 "req_perms" : getattr(self, '_perms', {}),
                 "perm_level" : getattr(request.user, 'rev_levels', {})
                 }
-        return self.other_response(dumps(data), 
+        return other_response(dumps(data), 
                               {'allow' : ','.join(self.allowed_methods)})
-    
-    def set_headers(self, response, headers):
-        '''
-        Set a dictionary of headers to the HttpResponse object.
-        
-        @param response: the HttpResponse
-        @param headers: the headers dictionary
-        '''
-        for key, val in headers.items():
-            setattr(response, key, val)
-    
-    def response(self, qs, headers = {}, extra = None):
-        '''
-        Returns a response according to the type of request made. This is done 
-        by passing in the Accept header with the desired Content-Type. If a 
-        recognizable content type is not found, defaults to json. This is a 
-        utility for serializing objects.
-        
-        If the query param single=true is found, then will return a single 
-        object if the queryset returns only one object. Otherwise all queries 
-        are sent in a list by default. This option is only available for json.
-        
-        @param request: the request object
-        @param qs: an iterable of manager objects, if a string or None will
-            return an error response
-        @param headers: a dictionary of headers to add
-        @param fields: a list of fields to include
-        @param extra: any extra data that needs to be serialized
-        @return the HttpResponse object
-        '''
-#         if 'xml' in self.accept:
-#             if not self.fields:
-#                 data = sz.serialize("xml", qs)
-#             else:
-#                 data = sz.serialize("xml", qs, fields = self.fields)
-#             ct = "application/xml"
-#         else: #defaults to json if nothing else is found of appropriate use
-        if qs is None or isinstance(qs, str):
-            if qs is None:
-                return err("There was a problem in querying the database"
-                           " with the query params provided.")
-            else:
-                return err(qs)
-        data = serialize(self, qs, rootcall=self.rootcall, extra=extra)
-        ct = "application/json"
-        resp = HttpResponse(data, content_type = ct)
-        if headers:
-            self.set_headers(resp, headers)
-        return resp
-    
-    def other_response(self, data = None, headers = {}):
-        '''
-        Returns a response according to the type of request made. This is done 
-        by passing in the Accept header with the desired Content-Type. If a 
-        recognizable content type is not found, defaults to json. Data should 
-        already be formatted in the correct Content-Type. This is a utility for 
-        sending all other responses.
-        
-        @param request: the request object
-        @param data: the data to send; if None will send nothing with status 204
-        @return the HttpResponse object
-        '''
-        if data is not None:
-            if 'xml' in self.accept:
-                ct = "application/xml"
-            else: #defaults to json if nothing else is found of appropriate use
-                ct = "application/json"
-            status = 200
-            resp = HttpResponse(data, content_type = ct, status = status)
-        else:
-            data = ""
-            ct = None
-            status = 204
-            resp = HttpResponse(content_type = ct, status = status)
-        if headers:
-            self.set_headers(resp, headers)
-        return resp
         
 class ModelAsView(ModelWrapper, BaseModelAsView):
 
@@ -767,7 +660,6 @@ class UserManager(BaseUserManager):
             raise ValueError('Users must have an email address')
 
         user = self.model(email=self.normalize_email(email))
-
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -783,12 +675,14 @@ class UserManager(BaseUserManager):
 
 class UserModelAsView(ABUWrapper, BaseModelAsView):
     """
-    Defines a few base attributes of the user. These can changed by subclassin
+    Defines a few base attributes of the user. These can changed by subclassing
     ABUWrapper instead of using this class.
     """
-    email = m.EmailField('The email of the poster. This is also the '
-                                'username.', max_length = 254, unique=True)
-    
+    email = m.EmailField('The email of the user. This is also the '
+                                'username.', 
+                         max_length = 254, 
+                         unique=True
+                         )
     objects = UserManager()    
     
     class Meta:

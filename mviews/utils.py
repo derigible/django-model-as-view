@@ -7,7 +7,6 @@ Created on Aug 27, 2015
 from datetime import datetime as dt
 from json import loads as load
 from json import dumps as d
-import math
 import os
 
 from django.conf import settings

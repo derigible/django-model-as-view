@@ -13,10 +13,10 @@ from django.views.generic.base import View
 from .utils import authenticate
 from .utils import USER
 from mviews.errors import AuthenticationError
-from mviews.serializer import objs_to_dict
+from mviews.serializer.models2dicts import convert_to_dicts
 from mviews.utils import err
 from mviews.utils import read
-from mviews.auth.utils import get_level, get_user_levels, get_user_level_names
+from mviews.mauth.utils import get_level, get_user_levels, get_user_level_names
 
 class CreateUser(View):
     '''
@@ -38,7 +38,7 @@ class CreateUser(View):
         try:
             print(j)
             p = USER.objects.create_user(**j)
-            resp = objs_to_dict(p, [p], p.field_names)[0]
+            resp = convert_to_dicts([p], p.field_names, p)[0]
             return jr(resp)
         except IntegrityError as ie:
             return err(ie)
