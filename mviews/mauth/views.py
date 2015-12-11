@@ -36,8 +36,7 @@ class CreateUser(View):
         '''
         j = read(request)
         try:
-            print(j)
-            p = USER.objects.create_user(**j)
+            p = USER().objects.create_user(**j)
             resp = convert_to_dicts([p], p.field_names, p)[0]
             return jr(resp)
         except IntegrityError as ie:

@@ -27,7 +27,7 @@ def hyperlink(rootcall, path, append = ''):
         return "{}/{}/{}".format(rootcall, path, append)
     return append
 
-def hyperlinkerize(value, rootcall, mview):
+def hyperlinkerize(value, rootcall, url_path):
     """
     Make the resource a hyperlink to the field. Only makes it as a hyperlink
     if rootcall is not empty. If you don't want to hyperlink values, set the
@@ -39,7 +39,7 @@ def hyperlinkerize(value, rootcall, mview):
     @return the data to send back, either hyperlinked or not
     """
     if rootcall and getattr(settings, 'HYPERLINK_VALUES', True):
-        return hyperlink(rootcall, mview.url_path, '{}/'.format(value))
+        return hyperlink(rootcall, url_path, '{}/'.format(value))
     else:
         return value
     
@@ -81,7 +81,7 @@ def paginator(queryset, limit=10, page_num=1):
                                   "limit" : limit,
                                   "returned" : to_return}
     
-def create_paging_dict(qs, path="/", limit=1, page=1, rootcall):
+def create_paging_dict(qs, path="/", limit=1, page=1, rootcall=''):
     """
     Create the paging dictionary used for returns to the client. It will also
     output the paginated queryset. You can also pass in a path that will make

@@ -78,7 +78,7 @@ class ViewWrapper(View):
             return err("Method {} not allowed.".format(request.method), 405)
 
         try:
-            check_perms(request, self._perms)
+            check_perms(request, getattr(self, '_perms', {}))
         except BaseAuthError as e:
             return err(e, e.status)
         #It makes sense why these are stored in the request, but i want them
@@ -88,10 +88,13 @@ class ViewWrapper(View):
         self.params._mutable = True #no reason for it to stay immutable
         self.fields = [f for f in self.params.get('_fields', "").split(',') 
                        if f in self.field_names]
-        self.expand = getattr(self, 'expand', '_expand' in self.params)
+        
         self.sdepth = (int(self.params['_depth']) 
                        if self.params.get('_depth', None) is not None and 
                        self.params.get('_depth', None).isdigit() else 0)
+        if not self.sdepth:
+            if hasattr(self, 'expand') or '_expand' in self.params:
+                self.sdepth = 1
         if getattr(settings, 'HYPERLINK_VALUES', True):
             self.rootcall = request.scheme + '://' + request.get_host()
         else:
@@ -231,10 +234,11 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
     def fks(self):
         if not hasattr(self, "_fks"):
             self._fks = [str(fk).split('.')[-1] for fk in self.field_names 
-                         if getattr(self._meta.get_field_by_name(fk)[0], 
-                                    "foreign_key",
+                         if getattr(self.__class__._meta.get_field_by_name(fk)[0], 
+                                    "rel",
                                      False
-                                     )
+                                     ) 
+                            and not fk.endswith('_id')
                          ]
         return self._fks
         
@@ -251,6 +255,8 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         Get the ids from the arguments or from the ids param if it exists, or
         return an empty list if none are found.
         ''' 
+        if not args:
+            return args
         if args[0] is not None and args[0]:
             args = args[0].strip('/')
             args = args.split('/')
@@ -302,10 +308,10 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
                 fields = pfields
             else:
                 fields = self.fields #already filtered
-        if self.expand:
+        if self.sdepth:
             if fields:
                 qs = qs.only(*fields)
-            qs = qs.select_related().prefetch_related()
+            qs = qs.select_related(*self.fks).prefetch_related()
         elif fields:
             qs = qs.values(*fields)
         else:
@@ -400,7 +406,7 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         If you want to return only the aggregates and not the rest of the query,
         set the flag _aggs_only.
         '''
-        return response(self.do_get(request, *args, **kwargs))
+        return response(self, self.do_get(request, *args, **kwargs))
     
     def do_post(self, request, *args, **kwargs):
         '''
@@ -421,7 +427,7 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
                 for m2m in self.m2ms:
                     if m2m in self.data and type(self.data.get(m2m)) == list:
                         getattr(bp, m2m).add(*self.data[m2m])
-            self.expand = True
+            self.sdepth = 1
             return (bp,)
         else:
             to_create = []
@@ -431,13 +437,13 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
                     to_create.append(self.__class__(**ud))
             else:
                 to_create = [self.__class__(**ud) for ud in self.data["data"]]
-            if self.expand:
+            if self.sdepth:
                 for c in to_create:
                     c.save()
                 return to_create
             else:
                 created = self.__class__.objects.bulk_create(to_create)
-                self.expand = True
+                self.sdepth = 1
                 return created   
     
     def post(self, request, *args, **kwargs):
@@ -490,7 +496,7 @@ class BaseModelAsView(BaseModelWrapper, ViewWrapper):
         
         These will return the data that has been created as if it were a GET.
         '''
-        return response(self.do_post(request, *args, **kwargs))   
+        return response(self, self.do_post(request, *args, **kwargs))   
     
     def _update_entity(self, qs, data, to_remove):
         """

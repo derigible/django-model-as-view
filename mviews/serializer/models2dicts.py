@@ -30,7 +30,7 @@ from django.db.models.manager import Manager
 from .utils import hyperlinkerize
 
 
-def convert_to_dicts(qs, field_names, base_type=None, depth=0, rootcall=''):
+def convert_to_dicts(qs, field_names, depth=0, rootcall=''):
     """
     Convert a list-like set of model objects into a list of dictionaries. Will
     expand the nested objects in the models to the level determined by the
@@ -67,14 +67,12 @@ def convert_to_dicts(qs, field_names, base_type=None, depth=0, rootcall=''):
     @param field_names: if a list, will filter the first-level objects' fields;
                         if a dict, will filter each level by the list provided
                         for that field name
-    @param base_type: the base type to check and ensure is not repeated in the
-                        return data when depth is greater than 0. If omitted
-                        then the check is turned off.
     @param depth: an integer that details how many levels of nested objects to
                     serialize. Defaults to 0.
     @param rootcall: the network location for the hyperlinks.
     """
     vals = []
+    base_type = qs.model
     if isinstance(field_names, dict):
         filt = field_names.get("base", _get_model_fields(base_type))
     else:
@@ -88,9 +86,13 @@ def convert_to_dicts(qs, field_names, base_type=None, depth=0, rootcall=''):
             except AttributeError:
                 continue #not a field on the model
             if isinstance(field, Manager):
+                #we start foreign relations at one less because we want to not
+                #count the step of getting the objects as a depth count
                 obj[f] = _foreign_rel_to_dict(base_type, 
                                               field, 
-                                              1, 
+                                              0, 
+                                              field_names,
+                                              f,
                                               rootcall, 
                                               depth
                                               ) 
@@ -107,19 +109,38 @@ def convert_to_dicts(qs, field_names, base_type=None, depth=0, rootcall=''):
                 obj[f] = field.name               
             else:
                 obj[f] = field
+            if getattr(settings, 'HYPERLINK_VALUES', True):
+                obj["url"] = hyperlinkerize(getattr(m, 
+                                                    'unique_id', 
+                                                    m.id
+                                                    ), 
+                                            rootcall, 
+                                            getattr(m, 'url_path', '')
+                                            ) 
     return vals
 
 def _get_model_fields(model):
     """
     Gets the model's fields.
     """
-    return getattr(model, 'field_names', model._meta.get_all_field_names())
+    return getattr(model, "public_fields", model._meta.get_all_field_names())
 
 def _get_filter(filters, field, model):
     """
     Get the filter or the field definition for the parsing to occur.
     """
-    return filters.get(field, _get_model_fields(model))
+    if isinstance(filters, dict):
+        return filters.get(field, _get_model_fields(model))
+    else:
+        fields = _get_model_fields(model)
+        return fields
+    
+def _is_foreign_key(fobj, field):
+    """
+    Check if is a foreign key to prevent getting lots of objects that we don't
+    want.
+    """
+    return getattr(fobj._meta.get_field_by_name(field)[0], "rel", False) 
 
 def _foreign_obj_to_dict(base_type, 
                          fobj, 
@@ -145,27 +166,31 @@ def _foreign_obj_to_dict(base_type,
     fields = _get_filter(field_filter, field, fobj)
     fkDict = {}
     for f in fields:
+        if _is_foreign_key(fobj, f) and max_depth <= depth:
+            continue
         try:
             fo = getattr(fobj, f)
         except AttributeError:
             fo = getattr(fobj, f+'_set')
         if isinstance(fo, Manager):
-            if max_depth >= depth and type(fo) not in rels:
+            if max_depth > depth and type(fo) not in rels:
                 fkDict[f] = _foreign_rel_to_dict(base_type, 
                                                 fo, 
-                                                depth + 1,
+                                                depth+1,
                                                 field_filter,
                                                 f,
                                                 rootcall,
                                                 max_depth,
                                                 rels)
         elif isinstance(fo, models.Model):
-            if (max_depth >= depth and type(fo) != type(base_type) 
-                and type(fo) not in fos):
+            if (max_depth > depth 
+                and type(fo) != base_type 
+                and type(fo) not in fos
+                ):
                 fos.add(type(fobj))
                 fkDict[f] = _foreign_obj_to_dict(base_type, 
                                                 fo, 
-                                                depth + 1, 
+                                                depth+1, 
                                                 field_filter,
                                                 f,
                                                 rootcall,
@@ -178,10 +203,13 @@ def _foreign_obj_to_dict(base_type,
         else: 
             fkDict[f] = fobj.serializable_value(f)
     if getattr(settings, 'HYPERLINK_VALUES', True):
-        fkDict["url"] = hyperlinkerize(fkDict[getattr(fobj, 'unique_id', 'id')], 
-                                      rootcall, 
-                                      fobj) 
-    
+        fkDict["url"] = hyperlinkerize(fkDict[getattr(fobj, 
+                                                      'unique_id', 
+                                                      'id')
+                                              ], 
+                                       rootcall, 
+                                       getattr(fobj, 'url_path', '')
+                                       ) 
     return fkDict
 
 def _foreign_rel_to_dict(base_type, 
@@ -200,10 +228,10 @@ def _foreign_rel_to_dict(base_type,
     rels.add(type(frel))
     fks = []
     for fk in frel.all():
-        if max_depth >= depth:
+        if max_depth > depth:
             fkDict = _foreign_obj_to_dict(base_type, 
                                           fk, 
-                                          depth + 1, 
+                                          depth+1, 
                                           field_filter,
                                           field,
                                           rootcall, 

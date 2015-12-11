@@ -19,7 +19,8 @@ from django.contrib.auth import SESSION_KEY
 from mviews.utils import read
 from mviews.errors import AuthenticationError
 
-USER = get_user_model()
+
+USER = get_user_model
 
 
 def get_user_level_names():
@@ -36,7 +37,7 @@ def get_user_level_names():
     
     @return the current user model levels_by_name dictionary 
     """
-    return USER.level_by_name
+    return USER().level_by_name
 
 def get_user_levels():
     """
@@ -52,7 +53,7 @@ def get_user_levels():
     
     @return the current user model levels dictionary
     """
-    return USER.levels
+    return USER().levels
 
 def get_level_name(level):
     """

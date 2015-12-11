@@ -38,7 +38,24 @@ def serialize(mview, qs, serializer=None, rootcall='', extra = None):
         return serializer(qs)
 #     if "xml" in mview.accept:
 #         return _serialize_xml(qs, rootcall)
-    return _serialize_json(mview, qs, rootcall, extra)
+    if mview.fields:
+        #get all of the field names specified and in the model
+        field_names = set(mview.fields).intersection(mview.field_names)
+    else:
+        field_names = set(mview.field_names)  
+    return _serialize_json(qs,
+                           field_names, 
+                           unique_id=mview.unique_id,
+                           depth=mview.sdepth,
+                           paginate=mview.params.get('_limit', 
+                                                     getattr(mview, 
+                                                             '__paginate',
+                                                              0)
+                                                     ),
+                           page=mview.params.get('_page', 1),
+                           rootcall=rootcall, 
+                           url_path=mview.url_path,
+                           extra=extra)
     
 def serialize_to_response(mview, qs, serializer=None, rootcall='', extra = None):
     """

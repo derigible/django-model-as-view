@@ -15,7 +15,8 @@ common_regex = {
                 'url_encoded_name' : "[\w|\d|\+|\.|%|\s|\-|_|=|,|;|(|)|:]*",
                 'id' : "\d*",
                 'timestamp' : "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}",
-                'utc_ts' : "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z"
+                'utc_ts' : "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
+                'utc2_ts' : "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
                 }
 
 def check_if_list(lst):
